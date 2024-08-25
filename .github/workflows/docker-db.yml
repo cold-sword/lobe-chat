@@ -1,79 +1,53 @@
-name: Publish Database Docker Image
+name: Build and Push Database Docker Image
 
 on:
   workflow_dispatch:
-  release:
-    types: [published]
+  push:
+    branches: [ main ]
+    paths:
+      - 'Dockerfile.database'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}-db
 
 jobs:
-  push_to_registries:
-    name: Push Docker image to Docker Hub and GitHub Container Registry
+  build-and-push:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+
     steps:
-      - name: Check out the repo
-        uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v3
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: coldsword
-          password: Lx20030816#
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+    - name: Log in to the Container registry
+      uses: docker/login-action@v2
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            lobehub/lobe-chat-database
-            ghcr.io/${{ github.repository }}/lobe-chat-database
-          tags: |
-            type=raw,value=latest
-            type=ref,event=tag
+    - name: Create Dockerfile.db
+      run: |
+        cp Dockerfile.database Dockerfile.db
+        echo "# Clerk" >> Dockerfile.db
+        echo "ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.CLERK_PUBLISHABLE_KEY }}" >> Dockerfile.db
+        echo "ENV CLERK_SECRET_KEY=\"\"" >> Dockerfile.db
+        echo "ENV CLERK_WEBHOOK_SECRET=${{ secrets.CLERK_WEBHOOK_SECRET }}" >> Dockerfile.db
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        file: ./Dockerfile.db
+        push: true
+        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Create Dockerfile.db
-        run: |
-          cp Dockerfile.database Dockerfile.db
-          echo "# Clerk" >> Dockerfile.db
-          echo "ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.CLERK_PUBLISHABLE_KEY }}" >> Dockerfile.db
-          echo "ENV CLERK_SECRET_KEY=\"\"" >> Dockerfile.db
-          echo "ENV CLERK_WEBHOOK_SECRET=${{ secrets.CLERK_WEBHOOK_SECRET }}" >> Dockerfile.db
-
-      - name: Build and push Docker image to Docker Hub
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile.db
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: lobehub/lobe-chat-database:latest,lobehub/lobe-chat-database:${{ github.ref_name }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build and push Docker image to GitHub Container Registry
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile.db
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ghcr.io/${{ github.repository }}/lobe-chat-database:latest,ghcr.io/${{ github.repository }}/lobe-chat-database:${{ github.ref_name }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+    - name: Clean up
+      if: always()
+      run: rm -f Dockerfile.db
