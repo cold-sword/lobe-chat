@@ -6,8 +6,8 @@ on:
     types: [published]
 
 jobs:
-  push_to_registry:
-    name: Push Docker image to Docker Hub and GitHub Container Registry
+  build_and_push:
+    name: Build and Push Docker image
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repo
@@ -32,12 +32,12 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels) for Docker
+      - name: Extract metadata for Docker
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: |
-            ${{ github.repository_owner }}/lobe-chat-database
+            cold-sword/lobe-chat-database
             ghcr.io/${{ github.repository_owner }}/lobe-chat-database
           tags: |
             type=raw,value=latest
@@ -49,7 +49,7 @@ jobs:
           $(cat Dockerfile.database)
 
           # Clerk
-          ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.CLERK_PUBLISHABLE_KEY }}
           ENV CLERK_SECRET_KEY=""
           ENV CLERK_WEBHOOK_SECRET=${{ secrets.CLERK_WEBHOOK_SECRET }}
           EOT
