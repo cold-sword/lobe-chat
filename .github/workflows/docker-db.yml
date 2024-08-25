@@ -1,0 +1,55 @@
+name: Publish Database Docker Image
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  push_to_registry:
+    name: Push Docker image to Docker Hub and GitHub Container Registry
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Generate updated workflow
+        run: |
+          # 读取原始的 docker-database.yml 文件
+          cat .github/workflows/docker-database.yml > temp_workflow.yml
+          
+          # 添加 GitHub Container Registry 登录步骤
+          sed -i '/Log in to Docker Hub/i\
+          \      - name: Log in to GitHub Container Registry\
+          \        uses: docker/login-action@v3\
+          \        with:\
+          \          registry: ghcr.io\
+          \          username: ${{ github.repository_owner }}\
+          \          password: ${{ secrets.GITHUB_TOKEN }}\
+          ' temp_workflow.yml
+          
+          # 更新镜像名称以包含 GitHub Container Registry
+          sed -i 's/images: lobehub\/lobe-chat-database/images: |\
+            lobehub\/lobe-chat-database\
+            ghcr.io\/${{ github.repository_owner }}\/lobe-chat-database/' temp_workflow.yml
+          
+          # 添加更新 Dockerfile.db 的步骤
+          sed -i '/Build and push Docker image/i\
+          \      - name: Update Dockerfile.db\
+          \        run: |\
+          \          cp Dockerfile.database Dockerfile.db\
+          \          echo "" >> Dockerfile.db\
+          \          echo "# Clerk" >> Dockerfile.db\
+          \          echo "ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}" >> Dockerfile.db\
+          \          echo "ENV CLERK_SECRET_KEY=\"\"" >> Dockerfile.db\
+          \          echo "ENV CLERK_WEBHOOK_SECRET=${{ secrets.CLERK_WEBHOOK_SECRET }}" >> Dockerfile.db\
+          ' temp_workflow.yml
+          
+          # 更新构建步骤以使用 Dockerfile.db
+          sed -i 's/file: .\/Dockerfile.database/file: .\/Dockerfile.db/' temp_workflow.yml
+
+          # 将更新后的工作流保存到新文件
+          mv temp_workflow.yml updated_workflow.yml
+
+      - name: Run updated workflow
+        uses: ./.github/workflows/updated_workflow.yml
