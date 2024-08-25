@@ -13,43 +13,55 @@ jobs:
       - name: Check out the repo
         uses: actions/checkout@v4
 
-      - name: Generate updated workflow
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_REGISTRY_USER }}
+          password: ${{ secrets.DOCKER_REGISTRY_PASSWORD }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ github.repository_owner }}/lobe-chat-database
+            ghcr.io/${{ github.repository_owner }}/lobe-chat-database
+          tags: |
+            type=raw,value=latest
+            type=ref,event=tag
+
+      - name: Update Dockerfile.db
         run: |
-          # 读取原始的 docker-database.yml 文件
-          cat .github/workflows/docker-database.yml > temp_workflow.yml
-          
-          # 添加 GitHub Container Registry 登录步骤
-          sed -i '/Log in to Docker Hub/i\
-          \      - name: Log in to GitHub Container Registry\
-          \        uses: docker/login-action@v3\
-          \        with:\
-          \          registry: ghcr.io\
-          \          username: ${{ github.repository_owner }}\
-          \          password: ${{ secrets.GITHUB_TOKEN }}\
-          ' temp_workflow.yml
-          
-          # 更新镜像名称以包含 GitHub Container Registry
-          sed -i 's/images: lobehub\/lobe-chat-database/images: |\
-            lobehub\/lobe-chat-database\
-            ghcr.io\/${{ github.repository_owner }}\/lobe-chat-database/' temp_workflow.yml
-          
-          # 添加更新 Dockerfile.db 的步骤
-          sed -i '/Build and push Docker image/i\
-          \      - name: Update Dockerfile.db\
-          \        run: |\
-          \          cp Dockerfile.database Dockerfile.db\
-          \          echo "" >> Dockerfile.db\
-          \          echo "# Clerk" >> Dockerfile.db\
-          \          echo "ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}" >> Dockerfile.db\
-          \          echo "ENV CLERK_SECRET_KEY=\"\"" >> Dockerfile.db\
-          \          echo "ENV CLERK_WEBHOOK_SECRET=${{ secrets.CLERK_WEBHOOK_SECRET }}" >> Dockerfile.db\
-          ' temp_workflow.yml
-          
-          # 更新构建步骤以使用 Dockerfile.db
-          sed -i 's/file: .\/Dockerfile.database/file: .\/Dockerfile.db/' temp_workflow.yml
+          cat <<EOT >> Dockerfile.db
+          $(cat Dockerfile.database)
 
-          # 将更新后的工作流保存到新文件
-          mv temp_workflow.yml updated_workflow.yml
+          # Clerk
+          ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          ENV CLERK_SECRET_KEY=""
+          ENV CLERK_WEBHOOK_SECRET=${{ secrets.CLERK_WEBHOOK_SECRET }}
+          EOT
 
-      - name: Run updated workflow
-        uses: ./.github/workflows/updated_workflow.yml
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.db
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
