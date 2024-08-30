@@ -6,11 +6,11 @@ import { withBasePath } from '@/utils/basePath';
 import pkg from '../../package.json';
 import { INBOX_SESSION_ID } from './session';
 
-export const UTM_SOURCE = 'chat_preview';
+export const UTM_SOURCE = 'lobechat_preview';
 
-export const OFFICIAL_URL = 'https://lobechat.com/';
-export const OFFICIAL_PREVIEW_URL = 'https://chat-preview.lobehub.com/';
-export const OFFICIAL_SITE = 'https://lobehub.com/';
+export const OFFICIAL_URL = 'https://lobechat.coldsword.link/';
+export const OFFICIAL_PREVIEW_URL = 'https://lobechat-preview.coldsword.link/';
+export const OFFICIAL_SITE = 'https://lobechat.coldsword.link/';
 
 export const getCanonicalUrl = (path: string) => urlJoin(OFFICIAL_URL, path);
 
@@ -59,8 +59,8 @@ export const SESSION_CHAT_URL = (id: string = INBOX_SESSION_ID, mobile?: boolean
 export const imageUrl = (filename: string) => withBasePath(`/images/${filename}`);
 
 export const LOBE_URL_IMPORT_NAME = 'settings';
-export const EMAIL_SUPPORT = 'support@lobehub.com';
-export const EMAIL_BUSINESS = 'hello@lobehub.com';
+export const EMAIL_SUPPORT = 'support@lobechat.coldsword.link';
+export const EMAIL_BUSINESS = 'hello@lobechat.coldsword.link';
 
 export const MEDIDUM = 'https://medium.com/@lobehub';
 export const X = 'https://x.com/lobehub';
