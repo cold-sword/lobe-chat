@@ -9,7 +9,7 @@ on:
         default: false
         type: boolean
   schedule:
-    - cron: '0 2 * * *'  # 每天凌晨2点检查
+    - cron: '0 2 * * *'
   push:
     branches: [ main ]
     paths:
@@ -27,6 +27,8 @@ env:
 jobs:
   check-sync-and-build:
     runs-on: ubuntu-latest
+    outputs:
+      has_updates: ${{ steps.check_updates.outputs.has_updates }}
     
     steps:
     - name: Checkout code
@@ -56,72 +58,72 @@ jobs:
         
         if [ "$LOCAL_COMMIT" != "$UPSTREAM_COMMIT" ] || [ "${{ github.event.inputs.force_build }}" == "true" ]; then
           echo "has_updates=true" >> $GITHUB_OUTPUT
-          echo "✅ Updates found or force build requested!"
+          echo "Updates found or force build requested!"
         else
           echo "has_updates=false" >> $GITHUB_OUTPUT
-          echo "ℹ️ No updates found."
+          echo "No updates found."
         fi
     
     - name: Merge upstream changes
       if: steps.check_updates.outputs.has_updates == 'true'
       run: |
-        echo "🔄 Merging upstream changes..."
+        echo "Merging upstream changes..."
         git checkout main
         git merge upstream/main --no-edit || {
-          echo "❌ Merge conflict detected. Manual intervention required."
+          echo "Merge conflict detected. Manual intervention required."
           exit 1
         }
     
     - name: Modify Dockerfile.database
       if: steps.check_updates.outputs.has_updates == 'true'
       run: |
-        echo "🔧 Modifying Dockerfile.database..."
+        echo "Modifying Dockerfile.database..."
         
         DOCKERFILE="Dockerfile.database"
         
         if [ ! -f "$DOCKERFILE" ]; then
-          echo "❌ $DOCKERFILE not found!"
+          echo "Error: $DOCKERFILE not found!"
           exit 1
         fi
         
-        # 创建备份
+        # Create backup
         cp "$DOCKERFILE" "${DOCKERFILE}.bak"
         
-        # 检查并移除现有的Clerk环境变量（如果存在）
+        # Remove existing Clerk environment variables if they exist
         if grep -q "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY" "$DOCKERFILE"; then
-          echo "🔄 Updating existing Clerk environment variables..."
+          echo "Updating existing Clerk environment variables..."
           sed -i '/NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY/d' "$DOCKERFILE"
           sed -i '/CLERK_SECRET_KEY/d' "$DOCKERFILE"
           sed -i '/CLERK_WEBHOOK_SECRET/d' "$DOCKERFILE"
         fi
         
-        # 查找合适的位置插入环境变量（在最后一个ENV行之后）
+        # Find appropriate location to insert environment variables
         if grep -q "^ENV" "$DOCKERFILE"; then
-          # 在最后一个ENV行后添加
+          # Add after the last ENV line
           sed -i '/^ENV.*$/a\
 ENV    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="pk_test_ZXF1YWwtYmlyZC0zMy5jbGVyay5hY2NvdW50cy5kZXYk" \\\
            CLERK_SECRET_KEY="sk_test_isQsOJa8r2dWYiflNYI2TTJ5ywILxRBJ0Isj2SCNL0" \\\
            CLERK_WEBHOOK_SECRET="whsec_Ykr6ltPoruyQNl6BY8sMwcMzTidxX6Fi"' "$DOCKERFILE"
         else
-          # 如果没有ENV行，在FROM行之后添加
+          # If no ENV line exists, add after FROM line
           sed -i '/^FROM.*$/a\
 ENV    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="pk_test_ZXF1YWwtYmlyZC0zMy5jbGVyay5hY2NvdW50cy5kZXYk" \\\
            CLERK_SECRET_KEY="sk_test_isQsOJa8r2dWYiflNYI2TTJ5ywILxRBJ0Isj2SCNL0" \\\
            CLERK_WEBHOOK_SECRET="whsec_Ykr6ltPoruyQNl6BY8sMwcMzTidxX6Fi"' "$DOCKERFILE"
         fi
         
-        # 修改NEXT_PUBLIC_ENABLE_NEXT_AUTH的值
+        # Modify NEXT_PUBLIC_ENABLE_NEXT_AUTH value
         sed -i 's/NEXT_PUBLIC_ENABLE_NEXT_AUTH:-1/NEXT_PUBLIC_ENABLE_NEXT_AUTH:-0/g' "$DOCKERFILE"
         
-        echo "✅ Dockerfile modifications completed"
+        echo "Dockerfile modifications completed"
         
-        # 显示变更
-        echo "📋 Changes made to Dockerfile:"
+        # Show changes
+        echo "Changes made to Dockerfile:"
         diff "${DOCKERFILE}.bak" "$DOCKERFILE" || true
 
   build-multiarch:
     needs: check-sync-and-build
-    if: needs.check-sync-and-build.outputs.has_updates == 'true' || github.event.inputs.force_build == 'true'
+    if: needs.check-sync-and-build.outputs.has_updates == 'true'
     strategy:
       matrix:
         include:
@@ -197,7 +199,8 @@ ENV    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="pk_test_ZXF1YWwtYmlyZC0zMy5jbGVyay5hY2
 
   merge-and-push:
     name: Create Multi-arch Manifest
-    needs: build-multiarch
+    needs: [check-sync-and-build, build-multiarch]
+    if: needs.check-sync-and-build.outputs.has_updates == 'true'
     runs-on: ubuntu-latest
     
     steps:
@@ -242,22 +245,18 @@ ENV    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="pk_test_ZXF1YWwtYmlyZC0zMy5jbGVyay5hY2
         run: |
           docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE }}:${{ steps.meta.outputs.version }}
     
-      - name: Commit and push changes to repository
+      - name: Commit and push changes
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
           git add .
           if git diff --staged --quiet; then
-            echo "📝 No changes to commit"
+            echo "No changes to commit"
           else
-            git commit -m "🤖 Auto-sync: Update from upstream and modify Dockerfile
-            
-            - Synced with upstream lobehub/lobe-chat
-            - Updated Dockerfile.database with custom Clerk configuration
-            - Built and pushed Docker image: ${{ env.REGISTRY_IMAGE }}:latest"
+            git commit -m "Auto-sync: Update from upstream and modify Dockerfile"
             git push origin main
-            echo "✅ Changes committed and pushed"
+            echo "Changes committed and pushed"
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
