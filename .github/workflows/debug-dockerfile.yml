@@ -1,0 +1,70 @@
+name: Debug Dockerfile Modification
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug-dockerfile:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Show current Dockerfile content
+      run: |
+        echo "=== Current Dockerfile.database content ==="
+        if [ -f "Dockerfile.database" ]; then
+          cat Dockerfile.database
+        else
+          echo "Dockerfile.database not found!"
+          echo "Available files:"
+          ls -la
+        fi
+    
+    - name: Search for NEXT_PUBLIC_ENABLE_NEXT_AUTH patterns
+      run: |
+        echo "=== Searching for NEXT_PUBLIC_ENABLE_NEXT_AUTH patterns ==="
+        if [ -f "Dockerfile.database" ]; then
+          grep -n "NEXT_PUBLIC_ENABLE_NEXT_AUTH" Dockerfile.database || echo "Pattern not found"
+          echo "--- Broader search ---"
+          grep -n "NEXT_AUTH" Dockerfile.database || echo "NEXT_AUTH not found"
+          echo "--- Looking for similar patterns ---"
+          grep -n "\-1" Dockerfile.database || echo "No -1 patterns found"
+        fi
+    
+    - name: Test modification script
+      run: |
+        if [ ! -f "Dockerfile.database" ]; then
+          echo "Creating a test Dockerfile.database for testing..."
+          cat > Dockerfile.database << 'EOF'
+        FROM node:18-alpine
+        ENV NODE_ENV=production
+        ENV NEXT_PUBLIC_ENABLE_NEXT_AUTH:-1
+        COPY . /app
+        WORKDIR /app
+        EOF
+        fi
+        
+        # Create and run the modification script
+        cat > test_modify.sh << 'SCRIPT_EOF'
+        #!/bin/bash
+        
+        DOCKERFILE="Dockerfile.database"
+        cp "$DOCKERFILE" "${DOCKERFILE}.bak"
+        
+        echo "Before modification:"
+        cat "$DOCKERFILE"
+        
+        # Test the modification
+        sed -i 's/NEXT_PUBLIC_ENABLE_NEXT_AUTH:-1/NEXT_PUBLIC_ENABLE_NEXT_AUTH:-0/g' "$DOCKERFILE"
+        
+        echo "After modification:"
+        cat "$DOCKERFILE"
+        
+        echo "Diff:"
+        diff "${DOCKERFILE}.bak" "$DOCKERFILE" || true
+        SCRIPT_EOF
+        
+        chmod +x test_modify.sh
+        ./test_modify.sh
