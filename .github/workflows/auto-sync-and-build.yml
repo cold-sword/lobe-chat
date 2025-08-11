@@ -74,10 +74,11 @@ jobs:
           exit 1
         }
     
-    - name: Modify Dockerfile.database
+    - name: Create modification script
       if: steps.check_updates.outputs.has_updates == 'true'
       run: |
-        echo "Modifying Dockerfile.database..."
+        cat > modify_dockerfile.sh << 'EOF'
+        #!/bin/bash
         
         DOCKERFILE="Dockerfile.database"
         
@@ -90,27 +91,37 @@ jobs:
         cp "$DOCKERFILE" "${DOCKERFILE}.bak"
         
         # Remove existing Clerk environment variables if they exist
-        if grep -q "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY" "$DOCKERFILE"; then
-          echo "Updating existing Clerk environment variables..."
-          sed -i '/NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY/d' "$DOCKERFILE"
-          sed -i '/CLERK_SECRET_KEY/d' "$DOCKERFILE"
-          sed -i '/CLERK_WEBHOOK_SECRET/d' "$DOCKERFILE"
+        sed -i '/NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY/d' "$DOCKERFILE"
+        sed -i '/CLERK_SECRET_KEY/d' "$DOCKERFILE"
+        sed -i '/CLERK_WEBHOOK_SECRET/d' "$DOCKERFILE"
+        
+        # Create temporary env file
+        cat > temp_env.txt << 'ENVEOF'
+        ENV    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="pk_test_ZXF1YWwtYmlyZC0zMy5jbGVyay5hY2NvdW50cy5kZXYk" \
+               CLERK_SECRET_KEY="sk_test_isQsOJa8r2dWYiflNYI2TTJ5ywILxRBJ0Isj2SCNL0" \
+               CLERK_WEBHOOK_SECRET="whsec_Ykr6ltPoruyQNl6BY8sMwcMzTidxX6Fi"
+        ENVEOF
+        
+        # Find the last ENV line and insert after it
+        LAST_ENV_LINE=$(grep -n "^ENV" "$DOCKERFILE" | tail -1 | cut -d: -f1)
+        
+        if [ -n "$LAST_ENV_LINE" ]; then
+          # Insert after the last ENV line
+          sed -i "${LAST_ENV_LINE}r temp_env.txt" "$DOCKERFILE"
+        else
+          # If no ENV line found, insert after FROM line
+          FIRST_FROM_LINE=$(grep -n "^FROM" "$DOCKERFILE" | head -1 | cut -d: -f1)
+          if [ -n "$FIRST_FROM_LINE" ]; then
+            sed -i "${FIRST_FROM_LINE}r temp_env.txt" "$DOCKERFILE"
+          else
+            # As fallback, append to beginning
+            cat temp_env.txt "$DOCKERFILE" > temp_dockerfile
+            mv temp_dockerfile "$DOCKERFILE"
+          fi
         fi
         
-        # Find appropriate location to insert environment variables
-        if grep -q "^ENV" "$DOCKERFILE"; then
-          # Add after the last ENV line
-          sed -i '/^ENV.*$/a\
-ENV    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="pk_test_ZXF1YWwtYmlyZC0zMy5jbGVyay5hY2NvdW50cy5kZXYk" \\\
-           CLERK_SECRET_KEY="sk_test_isQsOJa8r2dWYiflNYI2TTJ5ywILxRBJ0Isj2SCNL0" \\\
-           CLERK_WEBHOOK_SECRET="whsec_Ykr6ltPoruyQNl6BY8sMwcMzTidxX6Fi"' "$DOCKERFILE"
-        else
-          # If no ENV line exists, add after FROM line
-          sed -i '/^FROM.*$/a\
-ENV    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="pk_test_ZXF1YWwtYmlyZC0zMy5jbGVyay5hY2NvdW50cy5kZXYk" \\\
-           CLERK_SECRET_KEY="sk_test_isQsOJa8r2dWYiflNYI2TTJ5ywILxRBJ0Isj2SCNL0" \\\
-           CLERK_WEBHOOK_SECRET="whsec_Ykr6ltPoruyQNl6BY8sMwcMzTidxX6Fi"' "$DOCKERFILE"
-        fi
+        # Clean up
+        rm -f temp_env.txt
         
         # Modify NEXT_PUBLIC_ENABLE_NEXT_AUTH value
         sed -i 's/NEXT_PUBLIC_ENABLE_NEXT_AUTH:-1/NEXT_PUBLIC_ENABLE_NEXT_AUTH:-0/g' "$DOCKERFILE"
@@ -119,7 +130,16 @@ ENV    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="pk_test_ZXF1YWwtYmlyZC0zMy5jbGVyay5hY2
         
         # Show changes
         echo "Changes made to Dockerfile:"
-        diff "${DOCKERFILE}.bak" "$DOCKERFILE" || true
+        if [ -f "${DOCKERFILE}.bak" ]; then
+          diff "${DOCKERFILE}.bak" "$DOCKERFILE" || true
+        fi
+        EOF
+        
+        chmod +x modify_dockerfile.sh
+    
+    - name: Modify Dockerfile.database
+      if: steps.check_updates.outputs.has_updates == 'true'
+      run: ./modify_dockerfile.sh
 
   build-multiarch:
     needs: check-sync-and-build
