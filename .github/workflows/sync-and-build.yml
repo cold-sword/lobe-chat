@@ -1,0 +1,209 @@
+name: Sync Upstream and Build Custom Docker Image
+
+on:
+  workflow_dispatch:  # 手动触发
+    inputs:
+      upstream_tag:
+        description: 'Upstream tag to sync (e.g., v1.0.0)'
+        required: true
+        type: string
+  schedule:
+    - cron: '0 2 * * *'  # 每天凌晨2点检查新版本
+
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY_IMAGE: coldsword/lobe-chat  # 修改为你的DockerHub用户名/仓库名
+  UPSTREAM_REPO: lobehub/lobe-chat
+
+jobs:
+  check-and-sync:
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      latest_tag: ${{ steps.check.outputs.latest_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check for new upstream release
+        id: check
+        run: |
+          # 获取上游最新release
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            LATEST_TAG="${{ github.event.inputs.upstream_tag }}"
+          else
+            LATEST_TAG=$(curl -s "https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/latest" | jq -r '.tag_name')
+          fi
+          
+          echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          
+          # 检查是否已经存在该tag
+          if git rev-parse "refs/tags/$LATEST_TAG" >/dev/null 2>&1; then
+            echo "Tag $LATEST_TAG already exists, skipping build"
+            echo "should_build=false" >> $GITHUB_OUTPUT
+          else
+            echo "New tag $LATEST_TAG found, will build"
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Add upstream remote and sync
+        if: steps.check.outputs.should_build == 'true'
+        run: |
+          git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git
+          git fetch upstream
+          git checkout -b sync-${{ steps.check.outputs.latest_tag }}
+          git merge upstream/main --no-edit
+          
+      - name: Modify Dockerfile
+        if: steps.check.outputs.should_build == 'true'
+        run: |
+          # 使用sed修改Dockerfile
+          sed -i '/^ENV NEXT_PUBLIC_BASE_PATH/a\\    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="pk_test_ZXF1YWwtYmlyZC0zMy5jbGVyay5hY2NvdW50cy5kZXYk" \\\
+              CLERK_SECRET_KEY="sk_test_isQsOJa8r2dWYiflNYI2TTJ5ywILxRBJ0Isj2SCNL0" \\\
+              CLERK_WEBHOOK_SECRET="whsec_Ykr6ltPoruyQNl6BY8sMwcMzTidxX6Fi"' Dockerfile
+          
+          # 修改NEXT_PUBLIC_ENABLE_NEXT_AUTH的值
+          sed -i 's/NEXT_PUBLIC_ENABLE_NEXT_AUTH="${NEXT_PUBLIC_ENABLE_NEXT_AUTH:-1}"/NEXT_PUBLIC_ENABLE_NEXT_AUTH="${NEXT_PUBLIC_ENABLE_NEXT_AUTH:-0}"/' Dockerfile
+          
+          # 在Model Variables部分添加Clerk环境变量
+          sed -i '/# Model Variables/,/ENV \\/{
+            /ENV \\/a\\    # Clerk\
+                CLERK_SECRET_KEY="" \\\
+                CLERK_WEBHOOK_SECRET="" \\
+          }' Dockerfile
+
+      - name: Commit changes and create tag
+        if: steps.check.outputs.should_build == 'true'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add Dockerfile
+          git commit -m "Sync upstream ${{ steps.check.outputs.latest_tag }} and apply custom modifications"
+          git tag ${{ steps.check.outputs.latest_tag }}
+          git push origin sync-${{ steps.check.outputs.latest_tag }}
+          git push origin ${{ steps.check.outputs.latest_tag }}
+          
+          # 合并到main分支
+          git checkout main
+          git merge sync-${{ steps.check.outputs.latest_tag }} --no-edit
+          git push origin main
+
+  build:
+    needs: check-and-sync
+    if: needs.check-and-sync.outputs.should_build == 'true'
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            os: ubuntu-latest
+          - platform: linux/arm64
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    name: Build ${{ matrix.platform }} Image
+    steps:
+      - name: Prepare
+        run: |
+          platform=${{ matrix.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_IMAGE }}
+          tags: |
+            type=raw,value=${{ needs.check-and-sync.outputs.latest_tag }}
+            type=raw,value=latest
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Get commit SHA
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          platforms: ${{ matrix.platform }}
+          context: .
+          file: ./Dockerfile
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            SHA=${{ steps.vars.outputs.sha_short }}
+          outputs: type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export digest
+        run: |
+          rm -rf /tmp/digests
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ env.PLATFORM_PAIR }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Create Multi-arch Image
+    needs: [check-and-sync, build]
+    if: needs.check-and-sync.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_IMAGE }}
+          tags: |
+            type=raw,value=${{ needs.check-and-sync.outputs.latest_tag }}
+            type=raw,value=latest
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.REGISTRY_IMAGE }}@sha256:%s ' *)
+
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE }}:${{ needs.check-and-sync.outputs.latest_tag }}
