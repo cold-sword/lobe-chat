@@ -63,20 +63,61 @@ jobs:
       - name: Modify Dockerfile
         if: steps.check.outputs.should_build == 'true'
         run: |
-          # 使用sed修改Dockerfile
-          sed -i '/^ENV NEXT_PUBLIC_BASE_PATH/a\\    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="pk_test_ZXF1YWwtYmlyZC0zMy5jbGVyay5hY2NvdW50cy5kZXYk" \\\
-              CLERK_SECRET_KEY="sk_test_isQsOJa8r2dWYiflNYI2TTJ5ywILxRBJ0Isj2SCNL0" \\\
-              CLERK_WEBHOOK_SECRET="whsec_Ykr6ltPoruyQNl6BY8sMwcMzTidxX6Fi"' Dockerfile
+          # 创建临时文件来存储修改后的Dockerfile
+          cp Dockerfile Dockerfile.backup
           
-          # 修改NEXT_PUBLIC_ENABLE_NEXT_AUTH的值
-          sed -i 's/NEXT_PUBLIC_ENABLE_NEXT_AUTH="${NEXT_PUBLIC_ENABLE_NEXT_AUTH:-1}"/NEXT_PUBLIC_ENABLE_NEXT_AUTH="${NEXT_PUBLIC_ENABLE_NEXT_AUTH:-0}"/' Dockerfile
+          # 使用Python脚本来精确修改Dockerfile
+          cat > modify_dockerfile.py << 'EOF'
+          import re
           
-          # 在Model Variables部分添加Clerk环境变量
-          sed -i '/# Model Variables/,/ENV \\/{
-            /ENV \\/a\\    # Clerk\
-                CLERK_SECRET_KEY="" \\\
-                CLERK_WEBHOOK_SECRET="" \\
-          }' Dockerfile
+          # 读取Dockerfile
+          with open('Dockerfile', 'r') as f:
+              content = f.read()
+          
+          # 1. 修改第一个ENV块，添加Clerk环境变量
+          pattern1 = r'(ENV NEXT_PUBLIC_BASE_PATH="\${NEXT_PUBLIC_BASE_PATH}" \\\s*FEATURE_FLAGS="\${FEATURE_FLAGS}")'
+          replacement1 = r'''ENV NEXT_PUBLIC_BASE_PATH="${NEXT_PUBLIC_BASE_PATH}" \
+              FEATURE_FLAGS="${FEATURE_FLAGS}" \
+              NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="pk_test_ZXF1YWwtYmlyZC0zMy5jbGVyay5hY2NvdW50cy5kZXYk" \
+              CLERK_SECRET_KEY="sk_test_isQsOJa8r2dWYiflNYI2TTJ5ywILxRBJ0Isj2SCNL0" \
+              CLERK_WEBHOOK_SECRET="whsec_Ykr6ltPoruyQNl6BY8sMwcMzTidxX6Fi"'''
+          
+          content = re.sub(pattern1, replacement1, content)
+          
+          # 2. 修改NEXT_PUBLIC_ENABLE_NEXT_AUTH的默认值
+          pattern2 = r'NEXT_PUBLIC_ENABLE_NEXT_AUTH="\${NEXT_PUBLIC_ENABLE_NEXT_AUTH:-1}"'
+          replacement2 = r'NEXT_PUBLIC_ENABLE_NEXT_AUTH="${NEXT_PUBLIC_ENABLE_NEXT_AUTH:-0}"'
+          
+          content = re.sub(pattern2, replacement2, content)
+          
+          # 3. 在Model Variables环境变量部分添加Clerk变量
+          pattern3 = r'(# Model Variables\nENV \\\s*# AI21)'
+          replacement3 = r'''# Model Variables
+          ENV \
+              # Clerk
+              CLERK_SECRET_KEY="" \
+              CLERK_WEBHOOK_SECRET="" \
+              # AI21'''
+          
+          content = re.sub(pattern3, replacement3, content, flags=re.MULTILINE)
+          
+          # 写回文件
+          with open('Dockerfile', 'w') as f:
+              f.write(content)
+          EOF
+          
+          python3 modify_dockerfile.py
+          
+          # 验证修改是否成功
+          echo "=== Dockerfile modifications applied ==="
+          echo "Checking for Clerk variables in build ENV:"
+          grep -A 5 "NEXT_PUBLIC_BASE_PATH" Dockerfile
+          echo ""
+          echo "Checking NEXT_PUBLIC_ENABLE_NEXT_AUTH value:"
+          grep "NEXT_PUBLIC_ENABLE_NEXT_AUTH" Dockerfile
+          echo ""
+          echo "Checking for Clerk in Model Variables:"
+          grep -A 5 "# Clerk" Dockerfile
 
       - name: Commit changes and create tag
         if: steps.check.outputs.should_build == 'true'
